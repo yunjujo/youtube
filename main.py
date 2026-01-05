@@ -1,99 +1,95 @@
 import streamlit as st
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 import pandas as pd
 from datetime import datetime
 import isodate
 
-# 페이지 설정
-st.set_page_config(page_title="YouTube Video Analyzer", page_icon="📊", layout="wide")
+# 1. API 키 설정 (Streamlit Secrets에서 호출)
+# Secrets 설정법: 관리자 페이지 -> Settings -> Secrets에 아래 형식으로 입력
+# YOUTUBE_API_KEY = "내_API_키_값"
+try:
+    API_KEY = st.secrets["YOUTUBE_API_KEY"]
+except KeyError:
+    st.error("Secrets에 'YOUTUBE_API_KEY'가 설정되지 않았습니다.")
+    st.stop()
 
-# 사이드바에서 API 키 입력 받기
-st.sidebar.title("Settings ⚙️")
-api_key = st.sidebar.text_input("YouTube API Key를 입력하세요", type="password")
+# 2. 유투브 API 빌드
+youtube = build("youtube", "v3", developerKey=API_KEY)
 
 def get_video_id(url):
-    """유튜브 URL에서 Video ID 추출"""
+    """유튜브 URL에서 비디오 ID 추출"""
     if "youtu.be/" in url:
         return url.split("/")[-1]
     elif "v=" in url:
         return url.split("v=")[1].split("&")[0]
-    else:
-        return None
+    return None
 
-def get_video_details(youtube, video_id):
-    """영상 상세 정보 가져오기"""
-    request = youtube.videos().list(
-        part="snippet,statistics,contentDetails",
-        id=video_id
-    )
-    response = request.execute()
-    return response['items'][0] if response['items'] else None
+# --- UI 레이아웃 ---
+st.set_page_config(page_title="YouTube 마스터 분석기", layout="wide")
 
-# 메인 UI
-st.title("📺 YouTube 영상 데이터 분석기")
-st.markdown("영상 URL을 입력하면 상세 통계와 썸네일을 확인할 수 있습니다.")
+st.title("🚀 YouTube 영상 데이터 요약기")
+st.markdown("URL을 입력하면 영상의 상세 정보와 통계를 한눈에 정리해 드립니다.")
 
-url = st.text_input("분석할 유튜브 영상 URL을 입력하세요", placeholder="https://www.youtube.com/watch?v=...")
+video_url = st.text_input("분석할 유튜브 영상 URL을 입력하세요", placeholder="https://www.youtube.com/watch?v=...")
 
-if url and api_key:
-    try:
-        youtube = build("youtube", "v3", developerKey=api_key)
-        video_id = get_video_id(url)
-        
-        if video_id:
-            video_data = get_video_details(youtube, video_id)
-            
-            if video_data:
-                snippet = video_data['snippet']
-                stats = video_data['statistics']
+if video_url:
+    video_id = get_video_id(video_url)
+    
+    if video_id:
+        try:
+            # API 호출
+            response = youtube.videos().list(
+                part="snippet,statistics,contentDetails",
+                id=video_id
+            ).execute()
+
+            if response['items']:
+                data = response['items'][0]
+                snippet = data['snippet']
+                stats = data['statistics']
                 
-                # 데이터 정리
+                # 데이터 가공
                 title = snippet['title']
+                channel = snippet['channelTitle']
                 published_at = datetime.strptime(snippet['publishedAt'], "%Y-%m-%dT%H:%M:%SZ")
-                view_count = int(stats.get('viewCount', 0))
-                comment_count = int(stats.get('commentCount', 0))
-                like_count = int(stats.get('likeCount', 0))
+                views = int(stats.get('viewCount', 0))
+                comments = int(stats.get('commentCount', 0))
+                likes = int(stats.get('likeCount', 0))
                 thumbnail_url = snippet['thumbnails']['high']['url']
-                
+
+                # --- 결과 출력 ---
                 st.divider()
                 
-                # 1. 썸네일 섹션
+                # 상단: 썸네일과 주요 지표
                 col1, col2 = st.columns([1, 1])
-                with col1:
-                    st.subheader("🖼️ Thumbnail")
-                    st.image(thumbnail_url, use_container_width=True)
-                    st.markdown(f"[🔗 썸네일 고화질 다운로드]({thumbnail_url})")
                 
-                # 2. 통계 지표 (한눈에 보기)
+                with col1:
+                    st.subheader("🖼️ 썸네일")
+                    st.image(thumbnail_url, use_container_width=True)
+                    st.markdown(f"**[🔗 썸네일 원본 보기 및 다운로드]({thumbnail_url})**")
+
                 with col2:
-                    st.subheader("📊 핵심 지표")
+                    st.subheader("📊 핵심 데이터 (한눈에 보기)")
                     m1, m2 = st.columns(2)
-                    m1.metric("조회 수", f"{view_count:,}회")
-                    m2.metric("댓글 수", f"{comment_count:,}개")
+                    m1.metric("총 조회 수", f"{views:,}회")
+                    m2.metric("총 댓글 수", f"{comments:,}개")
                     
                     m3, m4 = st.columns(2)
-                    m3.metric("좋아요 수", f"{like_count:,}개")
-                    m4.metric("게시일", published_at.strftime('%Y-%m-%d'))
+                    m3.metric("좋아요 수", f"{likes:,}개")
+                    m4.metric("게시 날짜", published_at.strftime('%Y-%m-%d'))
 
-                # 3. 요약 정보 정리 테이블
-                st.subheader("📝 영상 요약 정보")
-                summary_df = pd.DataFrame({
-                    "항목": ["영상 제목", "채널명", "게시 날짜", "조회 수", "댓글 수"],
-                    "내용": [title, snippet['channelTitle'], published_at.strftime('%Y-%m-%d %H:%M'), 
-                             f"{view_count:,}회", f"{comment_count:,}개"]
+                # 하단: 상세 요약 표
+                st.subheader("📝 영상 요약 정리")
+                df_summary = pd.DataFrame({
+                    "항목": ["영상 제목", "채널명", "업로드 일시", "영상 ID"],
+                    "상세 내용": [title, channel, published_at.strftime('%Y년 %m월 %d일 %H:%M'), video_id]
                 })
-                st.table(summary_df)
-                
+                st.table(df_summary)
+
             else:
-                st.error("영상 정보를 불러올 수 없습니다. ID를 확인해주세요.")
-        else:
-            st.error("올바른 유튜브 URL 형식이 아닙니다.")
-            
-    except HttpError as e:
-        st.error(f"API 오류 발생: {e}")
-    except Exception as e:
-        st.error(f"오류 발생: {e}")
-else:
-    if not api_key:
-        st.info("왼쪽 사이드바에 YouTube API Key를 입력해주세요.")
+                st.warning("영상을 찾을 수 없습니다. URL을 다시 확인해주세요.")
+                
+        except Exception as e:
+            st.error(f"오류가 발생했습니다: {e}")
+    else:
+        st.error("유효한 유튜브 URL 형식이 아닙니다.")
